@@ -1,0 +1,32 @@
+name: consent_kit
+description: >
+  Simplest and safest way to integrate Google User Messaging Platform (UMP)
+  for consent management in mobile ads. Android & iOS. Debug-safe.
+  Zero boilerplate.
+version: 1.0.0
+homepage: https://github.com/darkmintis/consent_kit
+repository: https://github.com/darkmintis/consent_kit
+issue_tracker: https://github.com/darkmintis/consent_kit/issues
+documentation: https://github.com/darkmintis/consent_kit#readme
+topics:
+  - consent
+  - gdpr
+  - ump
+  - ads
+  - privacy
+
+environment:
+  sdk: ^3.12.1
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_mobile_ads: ^5.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
