@@ -17,38 +17,55 @@ enum ConsentKitStatus {
 
 /// Abstract platform interface for consent operations.
 ///
-/// This abstraction exists so the implementation can be swapped out in tests
-/// without depending on google_mobile_ads native APIs.
+/// Swap this out in tests without depending on google_mobile_ads native APIs.
 abstract class ConsentPlatform {
-  /// The most recently cached consent status.
+  /// Most recently cached consent status.
   ///
-  /// Returns `null` if [requestConsentInfoUpdate] has not been called yet.
-  /// This is a synchronous cache for [ConsentKit.canRequestAds].
+  /// `null` until [requestConsentInfoUpdate] has completed once.
   ConsentKitStatus? get cachedStatus;
 
-  /// Request consent info update from Google UMP.
+  /// Most recently cached [canRequestAds] value from UMP.
   ///
-  /// This is the first step in the consent flow. It must be called before
-  /// any other consent operations.
+  /// `null` until refreshed from the platform.
+  bool? get cachedCanRequestAds;
+
+  /// Most recently cached privacy-options requirement.
+  ///
+  /// `null` until refreshed from the platform.
+  bool? get cachedPrivacyOptionsRequired;
+
+  /// Request consent info update from Google UMP (call every app launch).
   Future<void> requestConsentInfoUpdate({
     required bool debugMode,
     List<String>? testDeviceIds,
     ConsentKitDebugGeography? debugGeography,
     bool? tagForUnderAgeOfConsent,
+    Duration timeout = const Duration(seconds: 10),
   });
 
-  /// Get the current consent status.
+  /// Load and show the consent form if UMP requires it.
+  Future<void> loadAndShowConsentFormIfRequired({
+    Duration timeout = const Duration(seconds: 30),
+  });
+
+  /// Refresh and return the current consent status.
   Future<ConsentKitStatus> getConsentStatus();
 
-  /// Check if a consent form is available (indicates the user is in the EEA).
+  /// Whether UMP says ads may be requested.
+  Future<bool> canRequestAds();
+
+  /// Whether a privacy-options entry point must be shown.
+  Future<bool> isPrivacyOptionsRequired();
+
+  /// Whether a consent form is available for this user.
   Future<bool> isConsentFormAvailable();
 
-  /// Load and show the consent form if required.
-  Future<void> loadAndShowConsentFormIfRequired();
-
-  /// Show the privacy options form for users to change their consent.
+  /// Show the privacy options form.
   Future<bool> showPrivacyOptionsForm();
 
-  /// Reset consent state (for testing or compliance).
+  /// Reset consent state (testing / development only).
   Future<void> resetConsent();
+
+  /// Initialize the Mobile Ads SDK when ads are allowed.
+  Future<void> initializeMobileAds();
 }

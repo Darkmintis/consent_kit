@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
@@ -35,11 +34,18 @@ ConsentKitStatus _mapConsentStatus(ConsentStatus status) {
 /// Production implementation of [ConsentPlatform] backed by Google's UMP SDK.
 class ConsentKitImpl implements ConsentPlatform {
   ConsentKitStatus? _cachedStatus;
+  bool? _cachedCanRequestAds;
+  bool? _cachedPrivacyOptionsRequired;
+  bool _mobileAdsInitialized = false;
 
-  /// The most recently cached consent status.
-  /// Returns `null` if [requestConsentInfoUpdate] has not been called yet.
   @override
   ConsentKitStatus? get cachedStatus => _cachedStatus;
+
+  @override
+  bool? get cachedCanRequestAds => _cachedCanRequestAds;
+
+  @override
+  bool? get cachedPrivacyOptionsRequired => _cachedPrivacyOptionsRequired;
 
   @override
   Future<void> requestConsentInfoUpdate({
@@ -47,6 +53,7 @@ class ConsentKitImpl implements ConsentPlatform {
     List<String>? testDeviceIds,
     ConsentKitDebugGeography? debugGeography,
     bool? tagForUnderAgeOfConsent,
+    Duration timeout = const Duration(seconds: 10),
   }) async {
     try {
       final params = _buildConsentRequestParameters(
@@ -74,36 +81,20 @@ class ConsentKitImpl implements ConsentPlatform {
       );
 
       await completer.future.timeout(
-        const Duration(seconds: 10),
+        timeout,
         onTimeout: () {
           throw ConsentKitException(
-            'Consent info update timed out after 10 seconds.',
+            'Consent info update timed out after ${timeout.inSeconds} seconds.',
           );
         },
       );
 
-      final status = await ConsentInformation.instance.getConsentStatus();
-      _cachedStatus = _mapConsentStatus(status);
-
-      if (debugMode) {
-        debugPrint('[ConsentKit] Consent status: $_cachedStatus');
-      }
-
-      final formAvailable =
-          await ConsentInformation.instance.isConsentFormAvailable();
-      final isRequired = status == ConsentStatus.required;
-
-      if (formAvailable && isRequired) {
-        if (debugMode) {
-          debugPrint('[ConsentKit] Consent form is required. Showing form...');
-        }
-        await loadAndShowConsentFormIfRequired();
-      }
+      await _refreshCaches(debugMode: debugMode);
     } on ConsentKitException {
       rethrow;
     } catch (e) {
       throw ConsentKitException(
-        'Unexpected error during consent initialization.',
+        'Unexpected error during consent info update.',
         cause: e,
       );
     }
@@ -139,6 +130,60 @@ class ConsentKitImpl implements ConsentPlatform {
     );
   }
 
+  Future<void> _refreshCaches({required bool debugMode}) async {
+    final status = await ConsentInformation.instance.getConsentStatus();
+    _cachedStatus = _mapConsentStatus(status);
+    _cachedCanRequestAds = await ConsentInformation.instance.canRequestAds();
+    final privacy = await ConsentInformation.instance
+        .getPrivacyOptionsRequirementStatus();
+    _cachedPrivacyOptionsRequired =
+        privacy == PrivacyOptionsRequirementStatus.required;
+
+    if (debugMode) {
+      debugPrint(
+        '[ConsentKit] status=$_cachedStatus '
+        'canRequestAds=$_cachedCanRequestAds '
+        'privacyOptionsRequired=$_cachedPrivacyOptionsRequired',
+      );
+    }
+  }
+
+  @override
+  Future<void> loadAndShowConsentFormIfRequired({
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    try {
+      final completer = Completer<void>();
+      ConsentForm.loadAndShowConsentFormIfRequired((FormError? error) {
+        if (completer.isCompleted) return;
+        if (error != null) {
+          completer.completeError(
+            ConsentKitException('Consent form error: ${error.message}'),
+          );
+        } else {
+          completer.complete();
+        }
+      });
+      await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          throw ConsentKitException(
+            'Consent form timed out after ${timeout.inSeconds} seconds.',
+          );
+        },
+      );
+
+      await _refreshCaches(debugMode: kDebugMode);
+    } on ConsentKitException {
+      rethrow;
+    } catch (e) {
+      throw ConsentKitException(
+        'Failed to load and show consent form.',
+        cause: e,
+      );
+    }
+  }
+
   @override
   Future<ConsentKitStatus> getConsentStatus() async {
     try {
@@ -149,6 +194,39 @@ class ConsentKitImpl implements ConsentPlatform {
       if (_cachedStatus != null) return _cachedStatus!;
       throw ConsentKitException(
         'Failed to get consent status.',
+        cause: e,
+      );
+    }
+  }
+
+  @override
+  Future<bool> canRequestAds() async {
+    try {
+      _cachedCanRequestAds = await ConsentInformation.instance.canRequestAds();
+      return _cachedCanRequestAds!;
+    } catch (e) {
+      if (_cachedCanRequestAds != null) return _cachedCanRequestAds!;
+      throw ConsentKitException(
+        'Failed to check canRequestAds.',
+        cause: e,
+      );
+    }
+  }
+
+  @override
+  Future<bool> isPrivacyOptionsRequired() async {
+    try {
+      final status = await ConsentInformation.instance
+          .getPrivacyOptionsRequirementStatus();
+      _cachedPrivacyOptionsRequired =
+          status == PrivacyOptionsRequirementStatus.required;
+      return _cachedPrivacyOptionsRequired!;
+    } catch (e) {
+      if (_cachedPrivacyOptionsRequired != null) {
+        return _cachedPrivacyOptionsRequired!;
+      }
+      throw ConsentKitException(
+        'Failed to check privacy options requirement.',
         cause: e,
       );
     }
@@ -167,43 +245,6 @@ class ConsentKitImpl implements ConsentPlatform {
   }
 
   @override
-  Future<void> loadAndShowConsentFormIfRequired() async {
-    try {
-      final completer = Completer<void>();
-      ConsentForm.loadAndShowConsentFormIfRequired((FormError? error) {
-        if (completer.isCompleted) return;
-        if (error != null) {
-          completer.completeError(
-            ConsentKitException(
-              'Consent form error: ${error.message}',
-            ),
-          );
-        } else {
-          completer.complete();
-        }
-      });
-      await completer.future.timeout(
-        const Duration(seconds: 30),
-        onTimeout: () {
-          throw ConsentKitException(
-            'Consent form timed out after 30 seconds.',
-          );
-        },
-      );
-
-      final status = await ConsentInformation.instance.getConsentStatus();
-      _cachedStatus = _mapConsentStatus(status);
-    } on ConsentKitException {
-      rethrow;
-    } catch (e) {
-      throw ConsentKitException(
-        'Failed to load and show consent form.',
-        cause: e,
-      );
-    }
-  }
-
-  @override
   Future<bool> showPrivacyOptionsForm() async {
     try {
       final completer = Completer<bool>();
@@ -211,10 +252,14 @@ class ConsentKitImpl implements ConsentPlatform {
         if (completer.isCompleted) return;
         completer.complete(error == null);
       });
-      return completer.future.timeout(
-        const Duration(seconds: 10),
+      final shown = await completer.future.timeout(
+        const Duration(seconds: 30),
         onTimeout: () => false,
       );
+      if (shown) {
+        await _refreshCaches(debugMode: kDebugMode);
+      }
+      return shown;
     } on ConsentKitException {
       rethrow;
     } catch (e) {
@@ -230,6 +275,9 @@ class ConsentKitImpl implements ConsentPlatform {
     try {
       await ConsentInformation.instance.reset();
       _cachedStatus = ConsentKitStatus.unknown;
+      _cachedCanRequestAds = false;
+      _cachedPrivacyOptionsRequired = false;
+      _mobileAdsInitialized = false;
     } catch (e) {
       throw ConsentKitException(
         'Failed to reset consent.',
@@ -238,9 +286,23 @@ class ConsentKitImpl implements ConsentPlatform {
     }
   }
 
+  @override
+  Future<void> initializeMobileAds() async {
+    if (_mobileAdsInitialized) return;
+    await MobileAds.instance.initialize();
+    _mobileAdsInitialized = true;
+    if (kDebugMode) {
+      debugPrint('[ConsentKit] Mobile Ads SDK initialized.');
+    }
+  }
+
   /// Check if the current platform is supported (Android or iOS).
+  ///
+  /// Uses Flutter foundation APIs so the package stays import-safe on web.
   static void assertSupportedPlatform() {
-    if (!Platform.isAndroid && !Platform.isIOS) {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
       throw ConsentKitUnsupportedPlatformException();
     }
   }
