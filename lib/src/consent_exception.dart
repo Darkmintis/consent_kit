@@ -30,6 +30,6 @@ class ConsentKitUnsupportedPlatformException extends ConsentKitException {
   ConsentKitUnsupportedPlatformException()
       : super(
           'ConsentKit only supports Android and iOS. '
-              'This platform is not supported.',
+          'This platform is not supported.',
         );
 }
