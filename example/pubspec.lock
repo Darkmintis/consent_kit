@@ -38,7 +38,7 @@ packages:
     source: hosted
     version: "6.0.0"
   google_mobile_ads:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: google_mobile_ads
       sha256: "6029f6c48bc9b6b47767ddbb4847683048a2f006d418c871bd93c5eb6a8e5c3c"
