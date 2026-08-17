@@ -296,13 +296,17 @@ class ConsentKitImpl implements ConsentPlatform {
     }
   }
 
-  /// Check if the current platform is supported (Android or iOS).
+  /// Whether the current platform can run Google UMP (Android or iOS).
   ///
   /// Uses Flutter foundation APIs so the package stays import-safe on web.
+  static bool get isSupportedPlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  /// Throws if the current platform cannot run Google UMP.
   static void assertSupportedPlatform() {
-    if (kIsWeb ||
-        (defaultTargetPlatform != TargetPlatform.android &&
-            defaultTargetPlatform != TargetPlatform.iOS)) {
+    if (!isSupportedPlatform) {
       throw ConsentKitUnsupportedPlatformException();
     }
   }

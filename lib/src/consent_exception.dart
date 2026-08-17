@@ -21,7 +21,7 @@ class ConsentKitException implements Exception {
 class ConsentKitNotInitializedException extends ConsentKitException {
   ConsentKitNotInitializedException()
       : super(
-          'ConsentKit is not initialized. Call ConsentKit.initialize() first.',
+          'ConsentKit is not initialized. Call ConsentKit.bootstrap() first.',
         );
 }
 

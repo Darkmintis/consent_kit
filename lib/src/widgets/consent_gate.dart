@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../consent_kit.dart';
 
-/// Boots consent, then builds your app — the easiest ConsentKit integration.
+/// Boots consent in the background and builds your app immediately.
+///
+/// Matches Google's sample: the UI starts now, UMP may show a native form,
+/// and ads stay off until [ConsentKit.canRequestAds] is true.
 ///
 /// ```dart
 /// void main() {
@@ -12,40 +15,66 @@ import '../../consent_kit.dart';
 ///       config: ConsentKitConfig(
 ///         testDeviceIds: ['YOUR_TEST_DEVICE_ID'],
 ///         debugGeography: ConsentKitDebugGeography.eea,
-///         initializeMobileAds: true,
 ///       ),
-///       builder: (context) => const MyApp(),
+///       child: const MyApp(),
 ///     ),
 ///   );
 /// }
 /// ```
+///
+/// Set [waitForConsent] to `true` only if you want a loading screen before
+/// the app (not recommended - it delays first paint).
 class ConsentGate extends StatefulWidget {
-  /// Builds the real app once consent initialization finishes.
-  final WidgetBuilder builder;
+  /// The app to show. Prefer this over [builder].
+  final Widget? child;
+
+  /// Builds the real app. Ignored when [child] is set.
+  final WidgetBuilder? builder;
 
   /// Optional ConsentKit configuration.
   final ConsentKitConfig? config;
 
-  /// Shown while consent is initializing. Defaults to a centered spinner.
+  /// When `true`, holds [child] until consent finishes.
+  ///
+  /// Defaults to `false` (Google's recommended model).
+  final bool waitForConsent;
+
+  /// Shown while consent is initializing when [waitForConsent] is `true`.
+  ///
+  /// Must include its own [Directionality] (or a [MaterialApp]) if you pass a
+  /// custom widget. The default is a centered spinner.
   final Widget? loading;
 
-  /// Shown when consent fails and ads cannot be requested.
-  ///
-  /// Defaults to a simple error message with a retry button.
+  /// Shown when [waitForConsent] is `true` and gathering fails.
   final Widget Function(BuildContext context, Object error, VoidCallback retry)?
       errorBuilder;
 
-  /// Called after a successful initialize (including soft recovery).
+  /// Called after initialize finishes (including soft recovery).
   final void Function(ConsentKitResult result)? onReady;
+
+  /// Called when gathering fails and ads cannot be requested.
+  ///
+  /// When [waitForConsent] is `false`, the app still shows; ads stay off.
+  final void Function(Object error)? onError;
+
+  /// Test-only platform override. Do not pass this in production.
+  final ConsentPlatform? platform;
 
   const ConsentGate({
     super.key,
-    required this.builder,
+    this.child,
+    this.builder,
     this.config,
+    this.waitForConsent = false,
     this.loading,
     this.errorBuilder,
     this.onReady,
-  });
+    this.onError,
+    this.platform,
+  }) : assert(
+          child != null || builder != null,
+          'ConsentGate requires child or builder.',
+        );
 
   @override
   State<ConsentGate> createState() => _ConsentGateState();
@@ -62,6 +91,10 @@ class _ConsentGateState extends State<ConsentGate> {
     _bootstrap();
   }
 
+  Widget _app(BuildContext context) {
+    return widget.child ?? widget.builder!(context);
+  }
+
   Future<void> _bootstrap() async {
     setState(() {
       _loading = true;
@@ -70,7 +103,10 @@ class _ConsentGateState extends State<ConsentGate> {
     });
 
     try {
-      final result = await ConsentKit.initialize(config: widget.config);
+      final result = await ConsentKit.bootstrap(
+        config: widget.config,
+        platform: widget.platform,
+      );
       if (!mounted) return;
       widget.onReady?.call(result);
       setState(() {
@@ -79,6 +115,7 @@ class _ConsentGateState extends State<ConsentGate> {
       });
     } catch (e) {
       if (!mounted) return;
+      widget.onError?.call(e);
       setState(() {
         _error = e;
         _loading = false;
@@ -88,11 +125,17 @@ class _ConsentGateState extends State<ConsentGate> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.waitForConsent) {
+      return _app(context);
+    }
+
     if (_loading) {
       return widget.loading ??
-          const MaterialApp(
-            home: Scaffold(
-              body: Center(child: CircularProgressIndicator()),
+          const Directionality(
+            textDirection: TextDirection.ltr,
+            child: ColoredBox(
+              color: Color(0xFFF7F7F7),
+              child: Center(child: CircularProgressIndicator()),
             ),
           );
     }
@@ -130,7 +173,7 @@ class _ConsentGateState extends State<ConsentGate> {
     }
 
     if (_ready) {
-      return widget.builder(context);
+      return _app(context);
     }
 
     return const SizedBox.shrink();

@@ -12,11 +12,11 @@ enum ConsentKitDebugGeography {
   notEea,
 }
 
-/// Configuration for [ConsentKit.initialize].
+/// Configuration for [ConsentKit.initialize] / [ConsentKit.bootstrap].
 ///
 /// Example:
 /// ```dart
-/// await ConsentKit.initialize(
+/// ConsentKit.bootstrap(
 ///   config: ConsentKitConfig(
 ///     testDeviceIds: ['YOUR_TEST_DEVICE_ID'],
 ///     debugGeography: ConsentKitDebugGeography.eea,
@@ -39,8 +39,10 @@ class ConsentKitConfig {
   /// When `true`, UMP will not request consent from the user.
   final bool? tagForUnderAgeOfConsent;
 
-  /// When `true` (default), also initializes `MobileAds` after consent
-  /// if ads are allowed. Set to `false` if you initialize ads yourself.
+  /// When `true`, initializes `MobileAds` after consent if ads are allowed.
+  ///
+  /// Defaults to `true` so a typical AdMob app only calls [ConsentKit.bootstrap].
+  /// Set to `false` if you initialize ads yourself.
   final bool initializeMobileAds;
 
   /// Timeout for the consent-info update request.
@@ -53,7 +55,7 @@ class ConsentKitConfig {
     this.testDeviceIds,
     this.debugGeography,
     this.tagForUnderAgeOfConsent,
-    this.initializeMobileAds = false,
+    this.initializeMobileAds = true,
     this.infoUpdateTimeout = const Duration(seconds: 10),
     this.formTimeout = const Duration(seconds: 30),
   });

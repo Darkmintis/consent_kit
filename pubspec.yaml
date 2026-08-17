@@ -1,8 +1,7 @@
 name: consent_kit
 description: >-
-  Simplest and safest way to integrate Google User Messaging Platform (UMP)
-  for consent management in mobile ads. One-call init, ConsentGate widget,
-  privacy-options button, debug-safe. Android & iOS.
+  Google UMP for Flutter AdMob in three lines. Bootstrap consent, AdGate,
+  privacy-options button, debug-safe. Android, iOS; web/desktop no-op.
 version: 1.0.0
 homepage: https://github.com/darkmintis/consent_kit
 repository: https://github.com/darkmintis/consent_kit

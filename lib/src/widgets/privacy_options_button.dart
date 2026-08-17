@@ -7,6 +7,9 @@ import '../../consent_kit.dart';
 /// GDPR / UMP rules: if privacy options are required, the entry point must be
 /// visible and interactable. This widget hides itself otherwise.
 ///
+/// Listens to [ConsentKit.listenable], so it appears after background
+/// [ConsentKit.bootstrap] finishes.
+///
 /// ```dart
 /// AppBar(
 ///   actions: [
@@ -50,6 +53,17 @@ class _PrivacyOptionsButtonState extends State<PrivacyOptionsButton> {
   @override
   void initState() {
     super.initState();
+    ConsentKit.listenable.addListener(_onConsentChanged);
+    _refresh();
+  }
+
+  @override
+  void dispose() {
+    ConsentKit.listenable.removeListener(_onConsentChanged);
+    super.dispose();
+  }
+
+  void _onConsentChanged() {
     _refresh();
   }
 

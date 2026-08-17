@@ -2,8 +2,11 @@ export 'src/consent_config.dart';
 export 'src/consent_exception.dart';
 export 'src/consent_platform.dart';
 export 'src/consent_result.dart';
+export 'src/widgets/ad_gate.dart';
 export 'src/widgets/consent_gate.dart';
 export 'src/widgets/privacy_options_button.dart';
+
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
@@ -12,52 +15,55 @@ import 'src/consent_exception.dart';
 import 'src/consent_kit_impl.dart';
 import 'src/consent_platform.dart';
 import 'src/consent_result.dart';
+import 'src/stub_consent_platform.dart';
 
 /// The entry point for ConsentKit.
 ///
-/// The simplest and safest way to integrate Google's User Messaging Platform
-/// (UMP) for consent management in mobile ads.
+/// Google UMP for Flutter AdMob, without a ConsentManager class.
 ///
-/// ## Quick Start
+/// ## Quick start
 ///
 /// ```dart
-/// void main() async {
+/// void main() {
 ///   WidgetsFlutterBinding.ensureInitialized();
-///
-///   final result = await ConsentKit.initialize(
-///     config: ConsentKitConfig(initializeMobileAds: true),
-///   );
-///
-///   if (result.canRequestAds) {
-///     // Load ads
-///   }
-///
+///   ConsentKit.bootstrap();
 ///   runApp(const MyApp());
 /// }
 /// ```
 ///
-/// Or wrap your app with [ConsentGate] for zero-boilerplate UI:
-///
-/// ```dart
-/// runApp(
-///   ConsentGate(
-///     config: ConsentKitConfig(initializeMobileAds: true),
-///     builder: (context) => const MyApp(),
-///   ),
-/// );
-/// ```
+/// Load ads only through [guardAdLoad] or wrap them in [AdGate].
+/// Put [PrivacyOptionsButton] in an AppBar. Debug test-device IDs are ignored
+/// in release builds.
 class ConsentKit {
   ConsentKit._();
 
   static ConsentPlatform? _impl;
   static bool _initialized = false;
   static ConsentKitResult? _lastResult;
+  static Future<ConsentKitResult>? _initializeFuture;
+  static final ValueNotifier<ConsentKitResult?> _listenable =
+      ValueNotifier<ConsentKitResult?>(null);
 
-  /// Whether [initialize] has completed successfully.
+  /// Whether [initialize] / [bootstrap] has completed successfully.
   static bool get isInitialized => _initialized && _impl != null;
 
   /// The result of the most recent successful [initialize] call.
   static ConsentKitResult? get lastResult => _lastResult;
+
+  /// Completes when consent gathering finishes.
+  ///
+  /// If [bootstrap] is in flight, waits for it. If gathering already
+  /// succeeded, returns [lastResult]. Throws if bootstrap has not been called.
+  static Future<ConsentKitResult> get ready async {
+    if (_initialized && _lastResult != null) return _lastResult!;
+    if (_initializeFuture != null) return _initializeFuture!;
+    throw ConsentKitNotInitializedException();
+  }
+
+  /// Fires whenever consent state changes (init, privacy form, reset).
+  ///
+  /// Use with [ListenableBuilder], or prefer [AdGate] / [PrivacyOptionsButton].
+  static ValueListenable<ConsentKitResult?> get listenable => _listenable;
 
   /// Hard-resets static state for testing.
   ///
@@ -68,6 +74,18 @@ class ConsentKit {
     _impl = null;
     _initialized = false;
     _lastResult = null;
+    _initializeFuture = null;
+    _listenable.value = null;
+  }
+
+  /// Start consent without blocking [runApp].
+  ///
+  /// Same work as [initialize]. Ignore the returned future in `main`.
+  static Future<ConsentKitResult> bootstrap({
+    ConsentKitConfig? config,
+    ConsentPlatform? platform,
+  }) {
+    return initialize(config: config, platform: platform);
   }
 
   /// Initialize the consent flow (call once per app launch).
@@ -82,26 +100,46 @@ class ConsentKit {
   /// On gathering errors, recovers using the previous session's consent when
   /// UMP still reports that ads may be requested.
   ///
+  /// On web and desktop, uses a no-op backend: [canRequestAds] stays `false`
+  /// and nothing throws.
+  ///
   /// Debug settings in [config] are applied only in `kDebugMode`.
   ///
-  /// [platform] is for tests only — do not pass it in production.
+  /// [platform] is for tests only - do not pass it in production.
   static Future<ConsentKitResult> initialize({
     ConsentKitConfig? config,
-    @visibleForTesting ConsentPlatform? platform,
-  }) async {
+    ConsentPlatform? platform,
+  }) {
     if (_initialized && _lastResult != null) {
       if (kDebugMode) {
         debugPrint('[ConsentKit] Already initialized. Skipping.');
       }
-      return _lastResult!;
+      return Future.value(_lastResult!);
     }
+    return _initializeFuture ??= _gatherConsent(
+      config: config ?? const ConsentKitConfig(),
+      platform: platform,
+    ).whenComplete(() {
+      _initializeFuture = null;
+    });
+  }
 
-    final cfg = config ?? const ConsentKitConfig();
+  static Future<ConsentKitResult> _gatherConsent({
+    required ConsentKitConfig config,
+    ConsentPlatform? platform,
+  }) async {
     if (platform != null) {
       _impl = platform;
-    } else {
-      ConsentKitImpl.assertSupportedPlatform();
+    } else if (ConsentKitImpl.isSupportedPlatform) {
       _impl = ConsentKitImpl();
+    } else {
+      _impl = StubConsentPlatform();
+      if (kDebugMode) {
+        debugPrint(
+          '[ConsentKit] ${defaultTargetPlatform.name} is not Android/iOS. '
+          'Ads stay off.',
+        );
+      }
     }
 
     Object? gatheredError;
@@ -109,14 +147,14 @@ class ConsentKit {
     try {
       await _impl!.requestConsentInfoUpdate(
         debugMode: kDebugMode,
-        testDeviceIds: kDebugMode ? cfg.testDeviceIds : null,
-        debugGeography: kDebugMode ? cfg.debugGeography : null,
-        tagForUnderAgeOfConsent: cfg.tagForUnderAgeOfConsent,
-        timeout: cfg.infoUpdateTimeout,
+        testDeviceIds: kDebugMode ? config.testDeviceIds : null,
+        debugGeography: kDebugMode ? config.debugGeography : null,
+        tagForUnderAgeOfConsent: config.tagForUnderAgeOfConsent,
+        timeout: config.infoUpdateTimeout,
       );
 
       await _impl!.loadAndShowConsentFormIfRequired(
-        timeout: cfg.formTimeout,
+        timeout: config.formTimeout,
       );
     } catch (e) {
       gatheredError = e;
@@ -127,9 +165,7 @@ class ConsentKit {
       // Google: on error, still check canRequestAds from a previous session.
       final canAds = await _safeCanRequestAds();
       if (!canAds) {
-        _impl = null;
-        _initialized = false;
-        _lastResult = null;
+        _failInitialize();
         if (e is ConsentKitException) rethrow;
         throw ConsentKitException(
           'Consent initialization failed.',
@@ -143,7 +179,7 @@ class ConsentKit {
       error: gatheredError,
     );
 
-    if (cfg.initializeMobileAds && result.canRequestAds) {
+    if (config.initializeMobileAds && result.canRequestAds) {
       try {
         await _impl!.initializeMobileAds();
       } catch (e) {
@@ -155,6 +191,7 @@ class ConsentKit {
 
     _initialized = true;
     _lastResult = result;
+    _listenable.value = result;
 
     if (kDebugMode) {
       debugPrint('[ConsentKit] Initialized: $result');
@@ -163,20 +200,26 @@ class ConsentKit {
     return result;
   }
 
+  static void _failInitialize() {
+    _impl = null;
+    _initialized = false;
+    _lastResult = null;
+    _listenable.value = null;
+  }
+
   /// Whether the app can request ads (synchronous, cached).
   ///
-  /// Prefer reading this after [initialize]. Returns `false` when UMP has not
-  /// confirmed that ads are allowed.
-  ///
-  /// Must be called after [initialize].
+  /// Safe before [initialize]: returns `false` until UMP confirms ads.
   static bool get canRequestAds {
-    _assertInitialized();
+    if (!_initialized || _impl == null) return false;
     return _impl!.cachedCanRequestAds ?? false;
   }
 
   /// Refresh and return whether ads may be requested (async, live from UMP).
+  ///
+  /// Returns `false` if consent has not finished yet.
   static Future<bool> refreshCanRequestAds() async {
-    _assertInitialized();
+    if (!_initialized || _impl == null) return false;
     return _impl!.canRequestAds();
   }
 
@@ -196,8 +239,10 @@ class ConsentKit {
   ///
   /// Use this to show/hide a settings button. Prefer [PrivacyOptionsButton]
   /// which handles this automatically.
+  ///
+  /// Returns `false` if consent has not finished yet.
   static Future<bool> isPrivacyOptionsRequired() async {
-    _assertInitialized();
+    if (!_initialized || _impl == null) return false;
     return _impl!.isPrivacyOptionsRequired();
   }
 
@@ -212,12 +257,20 @@ class ConsentKit {
   /// Show the privacy options form.
   ///
   /// Returns `true` if the form was presented successfully.
-  /// Must be called after [initialize].
+  /// Returns `false` if consent is not ready or the form was not shown.
   static Future<bool> showPrivacyOptions() async {
-    _assertInitialized();
+    if (_initializeFuture != null) {
+      try {
+        await _initializeFuture;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (!_initialized || _impl == null) return false;
     final shown = await _impl!.showPrivacyOptionsForm();
     if (shown) {
       _lastResult = await _buildResult();
+      _listenable.value = _lastResult;
     }
     return shown;
   }
@@ -226,19 +279,44 @@ class ConsentKit {
   ///
   /// After calling this, [initialize] must be called again.
   static Future<void> resetConsent() async {
-    _assertInitialized();
+    if (!_initialized || _impl == null) {
+      throw ConsentKitNotInitializedException();
+    }
     await _impl!.resetConsent();
     _initialized = false;
     _lastResult = null;
+    _initializeFuture = null;
+    _listenable.value = null;
   }
 
   /// Initialize Mobile Ads if consent allows and it hasn't been initialized yet.
   ///
   /// No-op when [canRequestAds] is `false`.
   static Future<bool> initializeMobileAds() async {
-    _assertInitialized();
+    if (!_initialized || _impl == null) return false;
     if (!canRequestAds) return false;
     await _impl!.initializeMobileAds();
+    return true;
+  }
+
+  /// Runs [loadAd] only when UMP allows ad requests.
+  ///
+  /// If [bootstrap] / [initialize] is still running, waits for it.
+  /// Returns `true` when [loadAd] ran, `false` when ads are not allowed.
+  ///
+  /// ```dart
+  /// await ConsentKit.guardAdLoad(() => banner.load());
+  /// ```
+  static Future<bool> guardAdLoad(FutureOr<void> Function() loadAd) async {
+    if (_initializeFuture != null) {
+      try {
+        await _initializeFuture;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (!canRequestAds) return false;
+    await loadAd();
     return true;
   }
 
@@ -289,12 +367,6 @@ class ConsentKit {
       return await _impl!.isPrivacyOptionsRequired();
     } catch (_) {
       return _impl!.cachedPrivacyOptionsRequired ?? false;
-    }
-  }
-
-  static void _assertInitialized() {
-    if (!_initialized || _impl == null) {
-      throw ConsentKitNotInitializedException();
     }
   }
 
