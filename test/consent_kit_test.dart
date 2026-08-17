@@ -1,4 +1,5 @@
 import 'package:consent_kit/consent_kit.dart';
+import 'package:consent_kit/src/stub_consent_platform.dart';
 import 'package:consent_kit/testing.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,32 +18,22 @@ void main() {
   });
 
   group('ConsentKit.initialize()', () {
-    test('throws when APIs used before init', () {
+    test('is safe before init - ads stay off, no throws on reads', () {
       expect(ConsentKit.isInitialized, isFalse);
       expect(ConsentKit.lastResult, isNull);
       expect(ConsentKit.privacyOptionsRequired, isFalse);
-      expect(
-        () => ConsentKit.canRequestAds,
-        throwsA(isA<ConsentKitNotInitializedException>()),
-      );
-      expect(
-        ConsentKit.refreshCanRequestAds(),
-        throwsA(isA<ConsentKitNotInitializedException>()),
-      );
-      expect(
-        ConsentKit.isPrivacyOptionsRequired(),
-        throwsA(isA<ConsentKitNotInitializedException>()),
-      );
-      expect(
-        ConsentKit.showPrivacyOptions(),
-        throwsA(isA<ConsentKitNotInitializedException>()),
-      );
+      expect(ConsentKit.canRequestAds, isFalse);
+      expect(ConsentKit.refreshCanRequestAds(), completion(isFalse));
+      expect(ConsentKit.isPrivacyOptionsRequired(), completion(isFalse));
+      expect(ConsentKit.showPrivacyOptions(), completion(isFalse));
+      expect(ConsentKit.initializeMobileAds(), completion(isFalse));
+      expect(ConsentKit.guardAdLoad(() {}), completion(isFalse));
       expect(
         ConsentKit.resetConsent(),
         throwsA(isA<ConsentKitNotInitializedException>()),
       );
-      expect(
-        ConsentKit.initializeMobileAds(),
+      expectLater(
+        ConsentKit.ready,
         throwsA(isA<ConsentKitNotInitializedException>()),
       );
     });
@@ -367,10 +358,7 @@ void main() {
       expect(mock.resetCallCount, 1);
       expect(ConsentKit.isInitialized, isFalse);
       expect(ConsentKit.lastResult, isNull);
-      expect(
-        () => ConsentKit.canRequestAds,
-        throwsA(isA<ConsentKitNotInitializedException>()),
-      );
+      expect(ConsentKit.canRequestAds, isFalse);
 
       mock
         ..setCanRequestAds(true)
@@ -414,7 +402,7 @@ void main() {
 
     test('ConsentKitNotInitializedException has actionable message', () {
       final e = ConsentKitNotInitializedException();
-      expect(e.message, contains('initialize()'));
+      expect(e.message, contains('bootstrap()'));
       expect(e, isA<ConsentKitException>());
     });
 
@@ -455,7 +443,7 @@ void main() {
       expect(config.testDeviceIds, isNull);
       expect(config.debugGeography, isNull);
       expect(config.tagForUnderAgeOfConsent, isNull);
-      expect(config.initializeMobileAds, isFalse);
+      expect(config.initializeMobileAds, isTrue);
       expect(config.infoUpdateTimeout, const Duration(seconds: 10));
       expect(config.formTimeout, const Duration(seconds: 30));
     });
@@ -500,6 +488,7 @@ void main() {
 
       await tester.pumpWidget(
         ConsentGate(
+          waitForConsent: true,
           loading: const MaterialApp(home: Text('loading')),
           builder: (context) => const MaterialApp(home: Text('ready')),
         ),
@@ -583,6 +572,149 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(IconButton), findsNothing);
+    });
+
+    testWidgets('appears after delayed bootstrap when required', (tester) async {
+      final delayed = _DelayedConsentPlatform(
+        delay: const Duration(milliseconds: 20),
+      )
+        ..setCanRequestAds(true)
+        ..setPrivacyOptionsRequired(true);
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(body: PrivacyOptionsButton()),
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(IconButton), findsNothing);
+
+      final gather = ConsentKit.bootstrap(platform: delayed);
+      await tester.pump(const Duration(milliseconds: 30));
+      await gather;
+      await tester.pump();
+
+      expect(find.byType(IconButton), findsOneWidget);
+    });
+  });
+
+  group('AdGate', () {
+    testWidgets('hides ads until consent allows them', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AdGate(
+            placeholder: const Text('no-ads'),
+            builder: (context) => const Text('ads'),
+          ),
+        ),
+      );
+      expect(find.text('no-ads'), findsOneWidget);
+      expect(find.text('ads'), findsNothing);
+
+      mock
+        ..setCanRequestAds(true)
+        ..setCachedStatus(ConsentKitStatus.obtained);
+      await ConsentKit.bootstrap(platform: mock);
+      await tester.pump();
+
+      expect(find.text('ads'), findsOneWidget);
+      expect(find.text('no-ads'), findsNothing);
+    });
+  });
+
+  group('ConsentKit.bootstrap / guardAdLoad / listenable', () {
+    test('bootstrap is initialize', () async {
+      mock.setCanRequestAds(true);
+      final result = await ConsentKit.bootstrap(platform: mock);
+      expect(result.canRequestAds, isTrue);
+      expect(ConsentKit.isInitialized, isTrue);
+      expect(await ConsentKit.ready, same(result));
+    });
+
+    test('concurrent initialize shares one gather', () async {
+      mock.setCanRequestAds(true);
+      final first = ConsentKit.initialize(platform: mock);
+      final second = ConsentKit.initialize(platform: mock);
+      final results = await Future.wait([first, second]);
+      expect(identical(results[0], results[1]), isTrue);
+      expect(mock.requestInfoUpdateCallCount, 1);
+    });
+
+    test('guardAdLoad runs load only when ads allowed', () async {
+      mock
+        ..setCanRequestAds(false)
+        ..setCachedStatus(ConsentKitStatus.required);
+      await ConsentKit.initialize(platform: mock);
+
+      var loads = 0;
+      expect(await ConsentKit.guardAdLoad(() => loads++), isFalse);
+      expect(loads, 0);
+
+      ConsentKit.resetForTesting();
+      mock = MockConsentPlatform()
+        ..setCanRequestAds(true)
+        ..setCachedStatus(ConsentKitStatus.obtained);
+      await ConsentKit.initialize(platform: mock);
+      expect(await ConsentKit.guardAdLoad(() => loads++), isTrue);
+      expect(loads, 1);
+    });
+
+    test('guardAdLoad waits for in-flight bootstrap', () async {
+      final delayed = _DelayedConsentPlatform(
+        delay: const Duration(milliseconds: 20),
+      )..setCanRequestAds(true);
+
+      var loads = 0;
+      final gather = ConsentKit.bootstrap(platform: delayed);
+      final guarded = ConsentKit.guardAdLoad(() => loads++);
+      await gather;
+      expect(await guarded, isTrue);
+      expect(loads, 1);
+    });
+
+    test('listenable updates after initialize', () async {
+      mock.setCanRequestAds(true);
+      expect(ConsentKit.listenable.value, isNull);
+      await ConsentKit.initialize(platform: mock);
+      expect(ConsentKit.listenable.value?.canRequestAds, isTrue);
+    });
+
+    test('stub platform leaves ads off and does not throw', () async {
+      final result = await ConsentKit.initialize(
+        platform: StubConsentPlatform(),
+      );
+      expect(result.canRequestAds, isFalse);
+      expect(ConsentKit.canRequestAds, isFalse);
+      expect(await ConsentKit.guardAdLoad(() {}), isFalse);
+    });
+
+    test('default config initializes Mobile Ads when ads allowed', () async {
+      mock.setCanRequestAds(true);
+      await ConsentKit.initialize(platform: mock);
+      expect(mock.mobileAdsInitialized, isTrue);
+    });
+  });
+
+  group('ConsentGate non-blocking', () {
+    testWidgets('shows app before consent finishes', (tester) async {
+      final delayed = _DelayedConsentPlatform(
+        delay: const Duration(milliseconds: 40),
+      )..setCanRequestAds(true);
+
+      await tester.pumpWidget(
+        ConsentGate(
+          platform: delayed,
+          builder: (context) => const MaterialApp(home: Text('app')),
+        ),
+      );
+
+      expect(find.text('app'), findsOneWidget);
+      expect(ConsentKit.isInitialized, isFalse);
+
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump();
+      expect(find.text('app'), findsOneWidget);
+      expect(ConsentKit.isInitialized, isTrue);
     });
   });
 }
@@ -695,4 +827,28 @@ class _NullCacheAdsPlatform implements ConsentPlatform {
 
   @override
   Future<void> initializeMobileAds() async {}
+}
+
+class _DelayedConsentPlatform extends MockConsentPlatform {
+  _DelayedConsentPlatform({required this.delay});
+
+  final Duration delay;
+
+  @override
+  Future<void> requestConsentInfoUpdate({
+    required bool debugMode,
+    List<String>? testDeviceIds,
+    ConsentKitDebugGeography? debugGeography,
+    bool? tagForUnderAgeOfConsent,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    await Future<void>.delayed(delay);
+    await super.requestConsentInfoUpdate(
+      debugMode: debugMode,
+      testDeviceIds: testDeviceIds,
+      debugGeography: debugGeography,
+      tagForUnderAgeOfConsent: tagForUnderAgeOfConsent,
+      timeout: timeout,
+    );
+  }
 }
