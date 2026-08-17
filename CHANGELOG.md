@@ -1,13 +1,14 @@
 ## 1.0.0
 
-Initial production release.
+First launch.
 
-- `ConsentKit.initialize()` — Google-recommended UMP flow (info update → form → optional Mobile Ads).
-- Returns `ConsentKitResult` with `status`, `canRequestAds`, `isPrivacyOptionsRequired`.
-- Sync `canRequestAds` backed by UMP's real `canRequestAds()` API.
-- `ConsentGate` — wrap your app for zero-boilerplate consent bootstrap.
-- `PrivacyOptionsButton` — shows only when UMP requires a privacy entry point.
+- `ConsentKit.bootstrap()` - Google's UMP sequence without blocking `runApp`.
+- `AdGate` and `guardAdLoad()` - ads never load unless UMP allows them.
+- `PrivacyOptionsButton` - shows only when UMP requires a privacy entry point.
+- `ConsentGate` - optional wrap; app paints immediately (`waitForConsent: true` to wait).
+- Safe defaults: `canRequestAds` is `false` until UMP confirms. Reads do not throw before init.
+- Debug-safe: `testDeviceIds` / `debugGeography` apply only in `kDebugMode`.
 - Soft recovery when gathering fails but a previous session still allows ads.
-- Debug-safe: `testDeviceIds` / `debugGeography` applied only in `kDebugMode`.
+- Web / desktop no-op - ads stay off instead of throwing.
+- `initializeMobileAds` defaults to `true`.
 - `package:consent_kit/testing.dart` with `MockConsentPlatform`.
-- Android & iOS only — throws `ConsentKitUnsupportedPlatformException` elsewhere.

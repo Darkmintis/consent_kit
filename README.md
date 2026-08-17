@@ -5,7 +5,7 @@
 
 # consent_kit
 
-**The simplest and safest way to integrate Google's User Messaging Platform (UMP) for consent management in mobile ads.**
+**Google UMP for Flutter AdMob in three lines.** Start the app immediately, gather consent in the background, and never request ads until UMP says you can.
 
 [![Flutter](https://img.shields.io/badge/Platform-Flutter-02569B?logo=flutter)](https://flutter.dev)
 [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android)](https://developer.android.com)
@@ -16,13 +16,15 @@
 
 ## Features
 
-- **One-call initialization** — UMP info update + form + optional Mobile Ads init.
-- **`ConsentGate` widget** — wrap your app; consent runs before UI.
-- **`PrivacyOptionsButton`** — shows only when UMP requires a privacy entry point.
-- **Real `canRequestAds`** — backed by Google UMP (cached for sync reads).
-- **Debug-safe** — test device IDs / debug geography apply only in `kDebugMode`.
-- **Soft recovery** — if gathering fails, previous-session consent can still allow ads.
-- **Testable** — inject `ConsentPlatform` or use `package:consent_kit/testing.dart`.
+- **Fire-and-forget `bootstrap()`** - Google's UMP sequence without a `ConsentManager` class.
+- **App UI is not blocked** - the native consent form can appear over your app, like Google's sample.
+- **`AdGate` + `guardAdLoad`** - ads never load unless `canRequestAds` is true.
+- **`PrivacyOptionsButton`** - shows only when UMP requires a privacy entry point.
+- **Safe defaults** - `canRequestAds` is `false` until UMP confirms. Reads never throw before init.
+- **Debug-safe** - test device IDs / debug geography apply only in `kDebugMode`.
+- **Web / desktop no-op** - same `main()`; ads stay off instead of crashing.
+- **Soft recovery** - if gathering fails, previous-session consent can still allow ads.
+- **Testable** - inject `ConsentPlatform` or use `package:consent_kit/testing.dart`.
 
 ---
 
@@ -31,7 +33,7 @@
 ```yaml
 dependencies:
   consent_kit: ^1.0.0
-  google_mobile_ads: ^5.0.0   # or any 5.x–9.x
+  google_mobile_ads: ^5.0.0   # or any 5.x-9.x
 ```
 
 ```bash
@@ -40,7 +42,7 @@ flutter pub get
 
 ### Platform setup (required for ads)
 
-**Android** — `android/app/src/main/AndroidManifest.xml`:
+**Android** - `android/app/src/main/AndroidManifest.xml`:
 
 ```xml
 <manifest>
@@ -52,18 +54,23 @@ flutter pub get
 </manifest>
 ```
 
-**iOS** — `ios/Runner/Info.plist`:
+**iOS** - `ios/Runner/Info.plist`:
 
 ```xml
 <key>GADApplicationIdentifier</key>
 <string>ca-app-pub-xxxxxxxxxxxxxxxx~yyyyyyyyyy</string>
+<key>NSUserTrackingUsageDescription</key>
+<string>This identifier will be used to deliver personalized ads.</string>
 ```
 
-Create a privacy message in the [AdMob Privacy & messaging](https://support.google.com/admob/answer/10113207) console for your app.
+Create these in [AdMob Privacy & messaging](https://support.google.com/admob/answer/10113207):
+
+1. A GDPR user messaging (UMP) message for your app.
+2. An IDFA / App Tracking Transparency message for iOS. UMP presents ATT when that message exists. This package does not add a second ATT prompt.
 
 ---
 
-## Quick start (recommended)
+## Quick start
 
 ```dart
 import 'package:flutter/material.dart';
@@ -71,17 +78,8 @@ import 'package:consent_kit/consent_kit.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  runApp(
-    ConsentGate(
-      config: const ConsentKitConfig(
-        testDeviceIds: ['YOUR_TEST_DEVICE_ID'], // debug only
-        debugGeography: ConsentKitDebugGeography.eea, // debug only
-        initializeMobileAds: true,
-      ),
-      builder: (context) => const MyApp(),
-    ),
-  );
+  ConsentKit.bootstrap();
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -95,10 +93,8 @@ class MyApp extends StatelessWidget {
           title: const Text('My App'),
           actions: const [PrivacyOptionsButton()],
         ),
-        body: Center(
-          child: Text(
-            ConsentKit.canRequestAds ? 'Ads allowed' : 'Ads not allowed',
-          ),
+        body: AdGate(
+          builder: (context) => const Text('Load your banner here'),
         ),
       ),
     );
@@ -106,34 +102,57 @@ class MyApp extends StatelessWidget {
 }
 ```
 
-### Imperative API
+Debug-only (ignored in release):
 
 ```dart
-void main() async {
+ConsentKit.bootstrap(
+  config: const ConsentKitConfig(
+    testDeviceIds: ['YOUR_TEST_DEVICE_ID'],
+    debugGeography: ConsentKitDebugGeography.eea,
+  ),
+);
+```
+
+### Load ads safely
+
+```dart
+await ConsentKit.guardAdLoad(() => banner.load());
+```
+
+Or wrap the widget:
+
+```dart
+AdGate(
+  builder: (context) => MyBannerAd(),
+)
+```
+
+### Optional: wrap with `ConsentGate`
+
+Same as calling `bootstrap()` in `main`. The app still builds immediately.
+
+```dart
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  final result = await ConsentKit.initialize(
-    config: const ConsentKitConfig(initializeMobileAds: true),
+  runApp(
+    ConsentGate(
+      child: const MyApp(),
+    ),
   );
-
-  if (result.canRequestAds) {
-    // Load ads
-  }
-
-  runApp(const MyApp());
 }
 ```
+
+Set `waitForConsent: true` only if you want a spinner before first paint.
 
 ---
 
 ## API reference
 
-### `ConsentKit.initialize()`
+### `ConsentKit.bootstrap()` / `initialize()`
 
 ```dart
-static Future<ConsentKitResult> initialize({
+static Future<ConsentKitResult> bootstrap({
   ConsentKitConfig? config,
-  @visibleForTesting ConsentPlatform? platform,
 })
 ```
 
@@ -142,9 +161,11 @@ Google-recommended flow:
 1. `requestConsentInfoUpdate`
 2. `loadAndShowConsentFormIfRequired`
 3. Refresh status / `canRequestAds` / privacy-options requirement
-4. Optionally `MobileAds.instance.initialize()` when allowed
+4. `MobileAds.instance.initialize()` when ads are allowed (default)
 
 On gathering errors, recovers if a previous session still allows ads (`result.recoveredFromError == true`).
+
+On web and desktop, uses a stub: `canRequestAds` stays `false`.
 
 ### `ConsentKitResult`
 
@@ -159,14 +180,17 @@ On gathering errors, recovers if a previous session still allows ads (`result.re
 
 | API | Description |
 |-----|-------------|
-| `canRequestAds` | Sync cached UMP value |
+| `canRequestAds` | Sync. `false` until UMP allows ads |
+| `guardAdLoad(load)` | Runs `load` only when ads are allowed |
+| `ready` | Future that completes when bootstrap finishes |
+| `listenable` | Rebuild widgets when consent changes |
 | `refreshCanRequestAds()` | Live async check |
 | `consentStatus` | Async status (`null` if not ready) |
 | `isPrivacyOptionsRequired()` | Async privacy entry-point check |
 | `privacyOptionsRequired` | Sync cached value |
 | `showPrivacyOptions()` | Present privacy form |
 | `initializeMobileAds()` | Init ads if allowed |
-| `resetConsent()` | Dev/test reset (then re-`initialize`) |
+| `resetConsent()` | Dev/test reset (then re-`bootstrap`) |
 | `isInitialized` / `lastResult` | State helpers |
 
 ### `ConsentKitConfig`
@@ -176,22 +200,23 @@ On gathering errors, recovers if a previous session still allows ads (`result.re
 | `testDeviceIds` | `null` | Debug only |
 | `debugGeography` | `null` | Debug only (`eea` / `notEea`) |
 | `tagForUnderAgeOfConsent` | `null` | TFUA |
-| `initializeMobileAds` | `false` | Init Mobile Ads after consent |
+| `initializeMobileAds` | `true` | Init Mobile Ads after consent |
 | `infoUpdateTimeout` | 10s | |
 | `formTimeout` | 30s | |
 
 ### Widgets
 
-- **`ConsentGate`** — consent bootstrap before your app builds.
-- **`PrivacyOptionsButton`** — GDPR-safe entry point; hidden when not required.
+- **`ConsentGate`** - starts bootstrap; shows your app immediately.
+- **`AdGate`** - builds child only when ads are allowed.
+- **`PrivacyOptionsButton`** - GDPR-safe entry point; hidden when not required.
 
 ### Exceptions
 
 | Exception | When |
 |-----------|------|
 | `ConsentKitException` | Consent / ads failure |
-| `ConsentKitNotInitializedException` | Used before `initialize()` |
-| `ConsentKitUnsupportedPlatformException` | Not Android/iOS |
+| `ConsentKitNotInitializedException` | `ready` / `resetConsent` before bootstrap |
+| `ConsentKitUnsupportedPlatformException` | Only if you call `assertSupportedPlatform()` on web/desktop |
 
 ---
 
@@ -199,7 +224,7 @@ On gathering errors, recovers if a previous session still allows ads (`result.re
 
 In debug builds only, ConsentKit applies `testDeviceIds` and `debugGeography`, and logs with `[ConsentKit]`.
 
-Release builds ignore those settings at the API level — safe to leave in source.
+Release builds ignore those settings at the API level - safe to leave in source.
 
 ```
 [ConsentKit] Test device IDs: [ABCD-1234]
@@ -218,7 +243,7 @@ test('handles ads not allowed', () async {
     ..setCanRequestAds(false)
     ..setCachedStatus(ConsentKitStatus.required);
 
-  await ConsentKit.initialize(platform: mock);
+  await ConsentKit.bootstrap(platform: mock);
 
   expect(ConsentKit.canRequestAds, isFalse);
 });
@@ -233,7 +258,15 @@ cd example
 flutter run
 ```
 
-One-screen demo: live status, can-request-ads, privacy options, and reset.
+Run on an **Android or iOS** device/emulator (not Chrome). The demo:
+
+1. Calls `bootstrap()` and shows **gathering** while UMP runs.
+2. Presents the native consent form when EEA applies (or when you force it).
+3. Updates live status (`canRequestAds`, privacy options, recovered-from-error).
+4. Loads a Google **test banner** inside `AdGate` only after ads are allowed.
+5. Lets you paste a hashed test device ID and tap **Reset and show form again**.
+
+Debug geography is EEA. UMP only honors that on a registered test device. Copy the hashed ID from logcat / Xcode (the `ConsentDebugSettings` / `UMPDebugSettings` line), paste it in the demo, then reset.
 
 ---
 
@@ -242,8 +275,8 @@ One-screen demo: live status, can-request-ads, privacy options, and reset.
 | Platform | Support |
 |----------|---------|
 | Android | Full |
-| iOS | Full |
-| Web / desktop | Throws `ConsentKitUnsupportedPlatformException` |
+| iOS | Full (add ATT usage string; UMP shows ATT if you create an IDFA message in AdMob) |
+| Web / desktop | No-op - ads stay off |
 
 ---
 
